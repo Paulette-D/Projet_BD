@@ -1,0 +1,5 @@
+DATA/
+_outdir/
+__pycache__/
+.jupyter_cache/
+*.pyc
