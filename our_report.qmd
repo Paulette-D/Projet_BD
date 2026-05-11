@@ -1,0 +1,155 @@
+---
+title: "Spark, File Formats and NLP"
+author: "Paulette Diouf, Aya Louzary, Yousra"
+date: may
+format: html
+jupyter: python3
+---
+
+```{r}
+reticulate::use_python("/Library/Frameworks/Python.framework/Versions/3.13/bin/python3", required = TRUE)
+```
+
+```{R}
+reticulate::py_require("requests")
+reticulate::py_config()
+```
+
+
+
+```{python}
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder \
+    .appName("StylemetryNLP") \
+    .getOrCreate()
+```
+
+```{python}
+import requests
+import re
+import time
+from pathlib import Path
+
+GUTENBERG_URL = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
+
+# La liste des romans à télécharger
+CORPUS = [
+    {"author": "Balzac",     "title": "Pere_Goriot",            "id": 1237,  "movement": "romantic", "lang": "fr"},
+    {"author": "Balzac",     "title": "Eugenie_Grandet",         "id": 1608,  "movement": "romantic", "lang": "fr"},
+    {"author": "Dumas",      "title": "Monte_Cristo",            "id": 17989, "movement": "romantic", "lang": "fr"},
+    {"author": "Stendhal",   "title": "Rouge_et_Noir",           "id": 798,   "movement": "romantic", "lang": "fr"},
+    {"author": "Sand",       "title": "Indiana",                 "id": 5837,  "movement": "romantic", "lang": "fr"},
+    {"author": "Bronte_C",   "title": "Jane_Eyre",               "id": 1260,  "movement": "romantic", "lang": "en"},
+    {"author": "Bronte_E",   "title": "Wuthering_Heights",       "id": 768,   "movement": "romantic", "lang": "en"},
+    {"author": "Scott",      "title": "Ivanhoe",                 "id": 82,    "movement": "romantic", "lang": "en"},
+    {"author": "Flaubert",   "title": "Madame_Bovary",           "id": 2413,  "movement": "realist",  "lang": "fr"},
+    {"author": "Zola",       "title": "Germinal",                "id": 5711,  "movement": "realist",  "lang": "fr"},
+    {"author": "Zola",       "title": "Assommoir",               "id": 8600,  "movement": "realist",  "lang": "fr"},
+    {"author": "Dickens",    "title": "Great_Expectations",      "id": 1400,  "movement": "realist",  "lang": "en"},
+    {"author": "Dickens",    "title": "Oliver_Twist",            "id": 730,   "movement": "realist",  "lang": "en"},
+    {"author": "Maupassant", "title": "Bel_Ami",                 "id": 4598,  "movement": "realist",  "lang": "fr"},
+]
+
+def clean_gutenberg(text):
+    #Supprime le header et footer ajoutés par Gutenberg.
+    start = re.search(r"\*\*\* START OF TH(IS|E) PROJECT GUTENBERG", text)
+    end   = re.search(r"\*\*\* END OF TH(IS|E) PROJECT GUTENBERG",   text)
+    if start and end:
+        text = text[start.end():end.start()]
+    return text.strip()
+
+def download_all(data_dir="DATA/"):
+    #Télécharge et sauvegarde dans DATA/.
+    for book in CORPUS:
+        path = Path(data_dir) / book["author"] / f"{book['title']}.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        if path.exists():
+            print(f"[cache] {book['title']}")
+            continue
+
+        url = GUTENBERG_URL.format(id=book["id"])
+        response = requests.get(url, timeout=30)
+        text = clean_gutenberg(response.text)
+
+        path.write_text(text, encoding="utf-8")
+        print(f"[ok] {book['title']} — {len(text):,} caractères")
+
+        time.sleep(1)  # pause pour ne pas surcharger Gutenberg
+
+download_all()
+```
+
+
+```{bash}
+#head -5 "DATA/Balzac/Pere_Goriot.txt"
+#head -5 "DATA/Flaubert/Madame_Bovary.txt"
+```
+
+```{python}
+from pathlib import Path
+from pyspark.sql.types import StructType, StructField, StringType
+
+DATA_DIR = "DATA/"
+
+metadata = {
+    "Pere_Goriot":         {"movement": "romantic", "lang": "en"},
+    "Eugenie_Grandet":     {"movement": "romantic", "lang": "en"},
+    "Monte_Cristo":        {"movement": "romantic", "lang": "en"},
+    "Rouge_et_Noir":       {"movement": "romantic", "lang": "en"},
+    "Indiana":             {"movement": "romantic", "lang": "en"},
+    "Jane_Eyre":           {"movement": "romantic", "lang": "en"},
+    "Wuthering_Heights":   {"movement": "romantic", "lang": "en"},
+    "Ivanhoe":             {"movement": "romantic", "lang": "en"},
+    "Madame_Bovary":       {"movement": "realist",  "lang": "en"},
+    "Germinal":            {"movement": "realist",  "lang": "en"},
+    "Assommoir":           {"movement": "realist",  "lang": "en"},
+    "Great_Expectations":  {"movement": "realist",  "lang": "en"},
+    "Oliver_Twist":        {"movement": "realist",  "lang": "en"},
+    "Bel_Ami":             {"movement": "realist",  "lang": "en"},
+}
+
+rows = []
+for author_dir in Path(DATA_DIR).iterdir():
+    author = author_dir.name
+    for txt_file in author_dir.glob("*.txt"):
+        title = txt_file.stem
+        text = txt_file.read_text(encoding="utf-8")
+        meta = metadata[title]
+        rows.append((author, title, meta["movement"], meta["lang"], text))
+
+schema = StructType([
+    StructField("author",   StringType(), True),
+    StructField("title",    StringType(), True),
+    StructField("movement", StringType(), True),
+    StructField("lang",     StringType(), True),
+    StructField("text",     StringType(), True),
+])
+
+df = spark.createDataFrame(rows, schema=schema)
+df.printSchema()
+df.select("author", "title", "movement", "lang").show()
+```
+```{python}
+df.write.mode("overwrite").parquet("DATA/corpus_raw.parquet")
+print("sauvegardé !")
+```
+```{bash}
+ls DATA/corpus_raw.parquet/
+```
+
+```{python}
+from pyspark.sql.functions import length, size, split
+
+df = df.withColumn("n_chars", length("text")) \
+       .withColumn("n_words", size(split("text", " ")))
+
+df.select("author", "title", "n_chars", "n_words").show()
+```
+```{python}
+df.write.mode("overwrite").parquet("DATA/corpus_enriched.parquet")
+print("sauvegardé !")
+```
+
+
