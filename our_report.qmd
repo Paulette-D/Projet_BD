@@ -10,19 +10,20 @@ jupyter: python3
 reticulate::use_python("/Library/Frameworks/Python.framework/Versions/3.13/bin/python3", required = TRUE)
 ```
 
-```{R}
-reticulate::py_require("requests")
-reticulate::py_config()
+```{python}
+import sparknlp
+from sparknlp.base import DocumentAssembler
+from sparknlp.annotator import SentenceDetector, Tokenizer
+from pyspark.ml import Pipeline
+
+spark = sparknlp.start()
+print("Spark-NLP:", sparknlp.version())
+print("Spark:", spark.version)
 ```
 
-
-
-```{python}
-from pyspark.sql import SparkSession
-
-spark = SparkSession.builder \
-    .appName("StylemetryNLP") \
-    .getOrCreate()
+```{r}
+reticulate::py_require("requests")
+reticulate::py_config()
 ```
 
 ```{python}
@@ -151,5 +152,54 @@ df.select("author", "title", "n_chars", "n_words").show()
 df.write.mode("overwrite").parquet("DATA/corpus_enriched.parquet")
 print("sauvegardé !")
 ```
+
+```{python}
+df = spark.read.parquet("DATA/corpus_enriched.parquet")
+df.show(5)
+```
+
+```{python}
+from sparknlp.base import DocumentAssembler
+from sparknlp.annotator import SentenceDetector, Tokenizer
+from pyspark.ml import Pipeline
+
+df = spark.read.parquet("DATA/corpus_enriched.parquet")
+
+document_assembler = DocumentAssembler() \
+    .setInputCol("text") \
+    .setOutputCol("document")
+
+sentence_detector = SentenceDetector() \
+    .setInputCols(["document"]) \
+    .setOutputCol("sentences")
+
+tokenizer = Tokenizer() \
+    .setInputCols(["sentences"]) \
+    .setOutputCol("tokens")
+
+pipeline = Pipeline(stages=[
+    document_assembler,
+    sentence_detector,
+    tokenizer
+])
+
+print("Pipeline créé !")
+```
+```{python}
+df = spark.read.parquet("DATA/corpus_enriched.parquet")
+
+model = pipeline.fit(df)
+df_annotated = model.transform(df)
+
+df_annotated.select("author", "title", "sentences", "tokens").show(3, truncate=80)
+```
+```{python}
+df_annotated.write.mode("overwrite").parquet("DATA/corpus_annotated.parquet")
+print("annoté et sauvegardé !")
+```
+
+
+
+
 
 
