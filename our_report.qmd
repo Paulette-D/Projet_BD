@@ -26,6 +26,20 @@ reticulate::py_require("requests")
 reticulate::py_config()
 ```
 
+# Introduction
+
+## Corpus et pipeline d'extraction
+
+Le corpus est composé de 14 romans du XIXe siècle répartis en deux mouvements littéraires : le **Romantisme** et le **Réalisme**. 
+Les textes ont été téléchargés depuis [Project Gutenberg](https://www.gutenberg.org/).
+
+## Téléchargement des textes
+
+Le pipeline ETL télécharge automatiquement les romans depuis Project Gutenberg 
+et supprime les en-têtes et pieds de page ajoutés par Gutenberg. 
+Les fichiers sont sauvegardés dans le dossier `DATA/` qui n'est pas commité 
+dans le dépôt git.
+
 ```{python}
 import requests
 import re
@@ -88,6 +102,12 @@ download_all()
 #head -5 "DATA/Flaubert/Madame_Bovary.txt"
 ```
 
+# Chargement et transformation
+
+## Construction du DataFrame Spark
+
+Les textes sont chargés dans un Spark DataFrame avec les métadonnées associées à chaque roman (auteur, mouvement littéraire, langue).
+
 ```{python}
 from pathlib import Path
 from pyspark.sql.types import StructType, StructField, StringType
@@ -132,6 +152,11 @@ df = spark.createDataFrame(rows, schema=schema)
 df.printSchema()
 df.select("author", "title", "movement", "lang").show()
 ```
+
+## Sauvegarde en Parquet
+
+Nous sauvegardons le DataFrame au format **Parquet**, un format orienté  colonne qui offre de meilleures performances en lecture que CSV ou JSON, notamment grâce à la compression et au pushdown de prédicats.
+
 ```{python}
 df.write.mode("overwrite").parquet("DATA/corpus_raw.parquet")
 print("sauvegardé !")
@@ -157,6 +182,16 @@ print("sauvegardé !")
 df = spark.read.parquet("DATA/corpus_enriched.parquet")
 df.show(5)
 ```
+
+# Annotation avec Spark-NLP
+
+## Pipeline d'annotation
+
+Nous utilisons Spark-NLP 5.5.3 avec PySpark 3.5.0. Le pipeline applique trois étapes successives sur chaque roman en parallèle :
+
+1. **DocumentAssembler** — convertit le texte brut en document Spark-NLP
+2. **SentenceDetector** — découpe le document en phrases
+3. **Tokenizer** — découpe chaque phrase en mots
 
 ```{python}
 from sparknlp.base import DocumentAssembler
@@ -197,6 +232,101 @@ df_annotated.select("author", "title", "sentences", "tokens").show(3, truncate=8
 df_annotated.write.mode("overwrite").parquet("DATA/corpus_annotated.parquet")
 print("annoté et sauvegardé !")
 ```
+
+
+
+# Analyse Stylométrique
+
+## Indices de lisibilité
+
+Les indices de lisibilité mesurent quantitativement la difficulté de lecture  d'un texte. Nous calculons deux indices : **Flesch-Kincaid** (FK) et 
+**Kandel-Moles** (KM), tous deux basés sur la longueur des phrases et lacomplexité des mots.
+
+### Flesch-Kincaid
+
+La formule de Flesch-Kincaid est :
+
+$$FK = 206.835 - 1.015 \times \frac{mots}{phrases} - 84.6 \times \frac{syllabes}{mots}$$
+
+Un score élevé indique un texte facile à lire. Les scores varient généralement entre 0 (très difficile) et 100 (très facile).
+
+```{python}
+from pyspark.sql.functions import col, size, udf
+from pyspark.sql.types import IntegerType
+
+def count_syllables(word):
+    vowels = "aeiouyAEIOUY"
+    count = 0
+    prev_vowel = False
+    for char in word:
+        is_vowel = char in vowels
+        if is_vowel and not prev_vowel:
+            count += 1
+        prev_vowel = is_vowel
+    return max(1, count)
+
+def total_syllables(tokens):
+    if tokens is None:
+        return 0
+    return sum(count_syllables(t.result) for t in tokens)
+
+syllables_udf = udf(total_syllables, IntegerType())
+
+df_annotated = spark.read.parquet("DATA/corpus_annotated.parquet")
+
+df_fk = df_annotated.withColumn("n_sentences", size(col("sentences"))) \
+                    .withColumn("n_syllables", syllables_udf(col("tokens")))
+
+df_fk.select("author", "title", "n_words", "n_sentences", "n_syllables").show()
+```
+
+```{python}
+
+```
+
+#Fait sur google colab car problème de mémoire (code + Interpretation)
+
+![Indice Flesch-Kincaid par auteur](images/IndiceFK.png)
+
+![Indice Kandel-Moles par auteur](Images/IndiceKM.png)
+
+
+## Résultats Flesch-Kincaid
+
+Les scores FK obtenus sont globalement bas (entre 19 et 55), ce qui est 
+cohérent avec des textes littéraires du XIXe siècle. 
+
+Quelques observations :
+
+- **Sand** obtient le score le plus élevé (55) — texte le plus accessible, 
+  mais aussi le plus court du corpus (14 000 mots)
+- **Maupassant** (19) et **Scott** (26) sont les plus difficiles à lire
+- Les auteurs **réalistes** (Zola, Dickens, Flaubert) ont des scores 
+  similaires aux **romantiques** — pas de différence nette entre les deux 
+  mouvements à ce stade
+
+
+## Indice de Kandel-Moles
+
+L'indice de Kandel-Moles est une adaptation française du Flesch-Kincaid, 
+avec des coefficients légèrement différents :
+
+$$KM = 207 - 1.015 \times \frac{mots}{phrases} - 73.6 \times \frac{syllabes}{mots}$$
+```{python}
+
+```
+
+##Loi Zipf sur collab:
+![Loi de Zipf — Père Goriot](images/ZipfPG.png)
+
+![Loi de Zipf — tous les romans](images/ZipfAll.png)
+
+![FK fenêtres glissantes — Père Goriot](images/fk_slidingPG.png)
+
+![FK fenêtres glissantes — tous les romans](images/fk_slidingAll.png)
+
+![Proportion dialogue vs narration par auteur](images/dialog_narration.png)
+
 
 
 
