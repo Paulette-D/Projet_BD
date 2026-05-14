@@ -7,7 +7,10 @@ jupyter: python3
 ---
 
 ```{r}
-reticulate::use_python("/Library/Frameworks/Python.framework/Versions/3.13/bin/python3", required = TRUE)
+#reticulate::use_python("/Library/Frameworks/Python.framework/Versions/3.13/bin/python3", required = TRUE)
+python_path <- ifelse(Sys.which("python3") != "", Sys.which("python3"), Sys.which("python"))
+reticulate::use_python(python_path, required = TRUE)
+# compatibilité mac et windows
 ```
 
 ```{python}
@@ -15,6 +18,8 @@ import sparknlp
 from sparknlp.base import DocumentAssembler
 from sparknlp.annotator import SentenceDetector, Tokenizer
 from pyspark.ml import Pipeline
+from pathlib import Path
+from pyspark.sql.types import StructType, StructField, StringType
 
 spark = sparknlp.start()
 print("Spark-NLP:", sparknlp.version())
@@ -114,7 +119,31 @@ from pyspark.sql.types import StructType, StructField, StringType
 
 DATA_DIR = "DATA/"
 
-metadata = {
+# apparemment réutiliser CORPUS c'est mieux
+corpus_index = {book["title"]: book for book in CORPUS}
+
+rows=[]
+for author_dir in Path(DATA_DIR).iterdir():
+  author = author_dir.name
+  for txt_file in author_dir.glob("*.txt"):
+    title = txt_file.stem
+    text = txt_file.read_text(encoding="utf-8")
+    meta = corpus_index[title]
+    rows.append((author, title, meta["movement"], meta["lang"], text))
+    
+schema = StructType([
+  StructField("author", StringType(), True),
+  StructField("title", StringType(), True),
+  StructField("movement", StringType(), True),
+  StructField("lang", StringType(), True),
+  StructField("text", StringType(), True),
+])
+
+df = spark.createDataFrame(rows, schema=schema)
+df.printSchema()
+df.select("author", "title", "movement", "lang").show()
+
+""" metadata = {
     "Pere_Goriot":         {"movement": "romantic", "lang": "en"},
     "Eugenie_Grandet":     {"movement": "romantic", "lang": "en"},
     "Monte_Cristo":        {"movement": "romantic", "lang": "en"},
@@ -150,7 +179,9 @@ schema = StructType([
 
 df = spark.createDataFrame(rows, schema=schema)
 df.printSchema()
-df.select("author", "title", "movement", "lang").show()
+df.select("author", "title", "movement", "lang").show()"""
+
+
 ```
 
 ## Sauvegarde en Parquet
