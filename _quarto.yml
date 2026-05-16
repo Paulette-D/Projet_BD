@@ -1,0 +1,16 @@
+project:
+  type: default
+  output-dir: _outdir
+
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: true
+    code-tools: true
+    theme: cosmo
+    fig-width: 9
+    fig-height: 5.5
+
+jupyter: python3
