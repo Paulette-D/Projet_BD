@@ -3,3 +3,12 @@ _outdir/
 __pycache__/
 .jupyter_cache/
 *.pyc
+.DS_Store
+.RData
+.Rapp.history
+.Rhistory
+.quarto/
+DATA/
+_outdir/
+__pycache__/
+*.pyc
