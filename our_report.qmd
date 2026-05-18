@@ -170,8 +170,11 @@ La loi de Zipf est vérifiée pour tous les romans du corpus:
 ## Fenêtres glissantes
 
 Les indices calculés sur l'ensemble d'un roman masquent les variations 
-internes du texte. Nous calculons FK sur des fenêtres de 1000 mots pour 
-observer comment le style évolue au fil du roman.
+internes du texte. Les fenêtres glissantes permettent d'observer comment 
+le style évolue au fil du roman.
+
+La question clé est : à partir de quelle taille de fenêtre l'indice 
+devient-il stable ? Nous comparons trois tailles : 500, 1000 et 2000 mots.
 
 ![FK fenêtres glissantes — Père Goriot](images/fk_sliding_pg.png)
 
@@ -184,6 +187,21 @@ passages plus denses.
 Tous les romans ont un comportement similaire, les scores oscillent entre 
 45 et 85 avec une moyenne autour de 65, indépendamment du mouvement 
 littéraire.
+
+![FK stabilité selon taille de fenêtre — Père Goriot](images/fk_sliding_wind.png)
+
+| Taille de fenetre | Moyenne | Ecart-type | Min | Max |
+|-------------------|---------|------------|-----|-----|
+| 500 mots | 67.40 | 6.84 | 35.84 | 81.84 |
+| 1000 mots | 67.39 | 6.00 | 40.26 | 80.93 |
+| 2000 mots | 67.14 | 5.86 | 40.26 | 80.00 |
+
+Plus la fenêtre est grande, plus la courbe est lisse et stable. 
+La moyenne reste identique (~67) quelle que soit la taille, ce qui 
+confirme que le style global de Balzac est cohérent tout au long du roman. 
+Seule la granularité de l'observation change. Une fenêtre de 1000 mots 
+est le meilleur compromis : elle capture les variations stylistiques 
+sans être trop sensible au bruit local.
 
 ## Dialogue vs Narration
 
@@ -217,8 +235,35 @@ et français :
   appartenance au mouvement romantique.
 
 
-# Spark — Analyse des performances
+# Spark - Analyse des performances
 
+## Configuration de la session Spark
+
+Par défaut, `sparknlp.start()` démarre Spark avec des paramètres opaques :
+1 seul core, peu de mémoire, 200 partitions de shuffle. Nous configurons 
+manuellement la session pour optimiser les performances dès le départ.
+
+```
+Spark version : 3.5.0
+Cores disponibles : 2
+shuffle.partitions : 8
+```
+
+Trois paramètres clés ont été configurés :
+
+- `local[*]` : Spark utilise tous les cores disponibles sur Colab (2 cores).
+  Sans ce paramètre Spark tourne sur 1 seul core, ce qui divise par 2 
+  la capacité de traitement parallèle.
+
+- `spark.driver.memory = 8g` : les colonnes NLP (`document`, `sentences`, 
+  `tokens`) sont très lourdes en mémoire. Avec 1Go par défaut le driver 
+  risque un `OutOfMemoryError` sur les DataFrames annotés.
+
+- `spark.sql.shuffle.partitions = 8` : fixé dès le démarrage pour que 
+  tous les groupBy et orderBy du pipeline utilisent 8 partitions au lieu 
+  de 200. Sur notre corpus de 14 romans, 200 partitions créent 186 
+  partitions vides qui consomment des ressources inutilement.
+  
 ## Comparaison des formats de fichiers
 
 Spark peut lire et écrire des données dans plusieurs formats. Nous 
@@ -236,10 +281,10 @@ temps d'écriture, temps de lecture et taille sur disque.
 
 **Parquet** est le meilleur format sur deux critères essentiels :
 
-- **Lecture la plus rapide** (0.29s) — 2x plus rapide que CSV et JSON.
+- **Lecture la plus rapide** (0.29s): 2x plus rapide que CSV et JSON.
   C'est crucial car dans un pipeline Spark on lit les données bien plus
   souvent qu'on ne les écrit.
-- **Taille la plus compacte** (6.37MB) — 37% plus léger que CSV grâce
+- **Taille la plus compacte** (6.37MB): 37% plus léger que CSV grâce
   à la compression Snappy et au stockage orienté colonne.
 
 **ORC** obtient des résultats similaires à Parquet, c'est un format 
@@ -264,6 +309,54 @@ car Spark lit directement depuis la mémoire. Le gain de 66.7% devient
 significatif quand on appelle le même DataFrame plusieurs fois comme 
 `df_annotated` qui est utilisé pour FK, KM, Zipf, fenêtres glissantes 
 et dialogue/narration.
+
+## Checkpointing
+
+Le cache et le persist maintiennent les données en mémoire ou sur disque 
+mais ne coupent pas le **lineage** de Spark. Le lineage est la chaîne de 
+recalcul que Spark conserve pour pouvoir rejouer un DataFrame depuis le 
+début en cas d'échec.
+
+Dans notre pipeline, le lineage de `df_annotated` remonte jusqu'au 
+téléchargement initial des textes depuis Gutenberg. Sur un pipeline long 
+comme le nôtre, ce lineage peut provoquer des plans d'exécution très 
+profonds et ralentir Spark.
+
+Le **checkpoint** est la seule opération qui tronque réellement le lineage. 
+Il sauvegarde le DataFrame sur Drive et repart de ce fichier pour toutes 
+les actions suivantes.
+
+| Mécanisme | Stockage | Survit à crash | Coupe lineage | Usage typique |
+|-----------|----------|----------------|---------------|---------------|
+| `cache()` | RAM | Non | Non | DataFrame réutilisé plusieurs fois |
+| `persist(DISK_ONLY)` | Disque local | Partiel | Non | DataFrame trop lourd pour la RAM |
+| `checkpoint()` | Drive / HDFS | Oui | Oui | Pipeline long, lineage trop profond |
+
+Nous appliquons le checkpoint sur `df_annotated` juste après l'annotation 
+NLP, point le plus profond du lineage. Le plan avant checkpoint remonte 
+jusqu'au fichier Parquet annoté via toutes les étapes NLP. Le plan après 
+checkpoint se réduit à un simple `Scan ExistingRDD`, preuve que le lineage 
+est bien coupé. Le checkpoint a été créé en 3.74s, un coût négligeable 
+comparé à la robustesse apportée sur l'ensemble du pipeline.
+
+### Persist avec différents niveaux de stockage
+
+`cache()` est un raccourci pour `persist(MEMORY_AND_DISK)`. Spark propose 
+plusieurs niveaux de stockage avec des compromis différents entre vitesse 
+et consommation mémoire. Nous comparons ici trois niveaux sur `df_annotated` :
+
+| Niveau | 1er appel | 2eme appel |
+|--------|-----------|------------|
+| MEMORY_ONLY | 1.30s | 0.20s |
+| MEMORY_AND_DISK | 2.26s | 0.31s |
+| DISK_ONLY | 1.41s | 0.23s |
+
+`MEMORY_ONLY` est le plus rapide en lecture (0.20s) car notre corpus annoté 
+rentre entièrement en RAM sur Colab, aucune partition n'est recalculée. 
+`MEMORY_AND_DISK` est plus lent car Spark vérifie d'abord la mémoire puis 
+le disque, même quand tout tient en RAM. Sur un cluster avec moins de 
+mémoire disponible, `MEMORY_AND_DISK` serait le meilleur choix pour éviter 
+les recalculs quand la RAM est pleine.
 
 ## Identification des shuffles
 
@@ -303,6 +396,78 @@ plus grand, la réduction du nombre de partitions aurait probablement
 un impact plus visible, car Spark passerait moins de temps à gérer des 
 partitions vides.
 
+### Stratégies supplémentaires de mitigation
+
+La réduction de `shuffle.partitions` n'apporte qu'un gain négligeable 
+sur notre corpus. Nous explorons deux stratégies supplémentaires.
+
+**Stratégie 1 : repartition() avant groupBy**
+
+Sans repartition      : 1.81s
+Avec repartition(14)  : 2.31s
+Gain : -27.6%
+
+L'idée est de redistribuer les données par clé avant l'agrégation pour 
+que Spark n'ait pas à shuffler des données déjà bien groupées. Sur notre 
+corpus cependant, cette stratégie est contre-productive (-27.6%) car les 
+données sont peu nombreuses et le repartition force un shuffle 
+supplémentaire avant le groupBy, ce qui coûte plus cher qu'il n'économise. 
+Cette stratégie devient pertinente sur des corpus beaucoup plus grands 
+avec des partitions très déséquilibrées.
+
+**Stratégie 2 : broadcast join**
+
+
+Quand on joint un grand DataFrame avec un petit, Spark peut envoyer le 
+petit DataFrame à chaque executor plutôt que de shuffler le grand. 
+Nos métadonnées (14 lignes) sont le candidat idéal.
+
+Join sans broadcast : 1.62s
+Join avec broadcast : 1.04s
+Gain : 35.8%
+Le plan d'exécution 
+confirme l'utilisation d'un `BroadcastHashJoin` : `df_annotated` ne bouge 
+pas, seul `df_meta` est distribué via un `BroadcastExchange`.
+
+| Strategie | Temps (s) | Gain |
+|-----------|-----------|------|
+| 200 partitions (defaut) | 318.99 | — |
+| 8 partitions | 318.89 | ~0% |
+| repartition(14, 'title') | 2.31 | -27.6% |
+| broadcast join | 1.04 | 35.8% |
+
+Le broadcast join est la strategie de mitigation la plus efficace de 
+notre projet. 
+
+Le sujet suggère une comparaison avec SpaCy. Par manque de temps, cette 
+comparaison n'a pas été réalisée. SpaCy offre une API plus simple et des 
+modèles pré-entraînés plus récents, mais ne s'intègre pas nativement dans 
+un pipeline Spark distribué, c'est l'avantage principal de Spark-NLP.
+
+# Conclusion
+
+Ce projet nous a permis de mettre en oeuvre un pipeline complet de 
+traitement de texte avec Spark, de l'extraction des données jusqu'à 
+l'analyse stylométrique.
+
+Sur le plan technique, Spark s'est révélé bien adapté au traitement 
+parallèle de corpus littéraires. Le choix de Parquet comme format de 
+stockage intermédiaire s'est confirmé pertinent à chaque étape du pipeline. 
+Le checkpointing et le cache ont permis d'éviter des recalculs coûteux 
+sur le DataFrame annoté, réutilisé de nombreuses fois en stylométrie.
+
+L'analyse des shuffles a mis en évidence une leçon importante : une 
+stratégie d'optimisation efficace sur un grand corpus peut être 
+contre-productive sur un petit. Sur 14 romans, le broadcast join est 
+la seule mitigation qui apporte un gain mesurable (35.8%), tandis que 
+la repartition et la réduction de partitions restent négligeables. 
+Ces résultats illustrent l'importance de toujours mesurer avant de conclure.
+
+Sur le plan stylistique, les indices de lisibilité et la loi de Zipf 
+confirment des tendances attendues sans révéler de rupture nette entre 
+romantiques et réalistes. Les données commentent les données, 
+rien de plus comme le demandait le sujet.
+
 # Appendice
 
 ## A1 — Installation et démarrage Spark
@@ -320,6 +485,7 @@ import re
 import time
 import os
 from pathlib import Path
+from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 from pyspark.ml import Pipeline
@@ -330,9 +496,17 @@ from pyspark.sql.functions import round as spark_round, sum as spark_sum, row_nu
 from pyspark.sql.window import Window
 import plotly.express as px
 
-spark = sparknlp.start()
-print("Spark-NLP:", sparknlp.version())
-print("Spark:", spark.version)
+spark = SparkSession.builder \
+    .appName("StyleProject") \
+    .master("local[*]") \
+    .config("spark.driver.memory", "8g") \
+    .config("spark.sql.shuffle.partitions", "8") \
+    .config("spark.jars.packages", "com.johnsnowlabs.nlp:spark-nlp_2.12:5.5.3") \
+    .getOrCreate()
+
+print(f"Spark version : {spark.version}")
+print(f"Cores disponibles : {spark.sparkContext.defaultParallelism}")
+print(f"shuffle.partitions : {spark.conf.get('spark.sql.shuffle.partitions')}")
 ```
 
 ## A2 — Montage Drive et ETL
@@ -519,9 +693,10 @@ df_zipf_all = df_freq_all.withColumn("rank", row_number().over(window))
 #| echo: true
 #| eval: false
 
+from pyspark.sql.functions import posexplode, floor, count, sum as spark_sum, col, lit
+from pyspark.sql.functions import round as spark_round
 from pyspark.sql.types import IntegerType
-
-WINDOW_SIZE = 1000
+import pandas as pd
 
 def count_syllables_word(word):
     if word is None:
@@ -538,27 +713,74 @@ def count_syllables_word(word):
 
 syllable_word_udf = udf(count_syllables_word, IntegerType())
 
-df_tokens_all = df_annotated.select(
-    "title", "author", "movement",
+# Père Goriot - une seule taille 
+WINDOW_SIZE = 1000
+df_one = df_annotated.filter(col("title") == "Pere_Goriot")
+df_tokens = df_one.select(
+    "title",
     posexplode("tokens").alias("pos", "token")
 ).select(
-    "title", "author", "movement",
-    col("pos"),
-    col("token.result").alias("word")
-)
+    "title", col("pos"), col("token.result").alias("word")
+).filter(col("word").rlike("^[a-zA-Z]+$")) \
+ .withColumn("syllables", syllable_word_udf(col("word")))
 
-df_windows_all = df_tokens_all \
-    .filter(col("word").rlike("^[a-zA-Z]+$")) \
+df_sliding = df_tokens \
     .withColumn("window_id", floor(col("pos") / WINDOW_SIZE)) \
-    .withColumn("syllables", syllable_word_udf(col("word")))
-
-df_sliding_all = df_windows_all.groupBy("title", "author", "movement", "window_id") \
+    .groupBy("title", "window_id") \
     .agg(count("*").alias("n_words"), spark_sum("syllables").alias("n_syllables")) \
     .withColumn("n_sentences_est", (col("n_words") / 15).cast("double")) \
     .withColumn("flesch_kincaid", spark_round(
         206.835
         - 1.015 * (col("n_words") / col("n_sentences_est"))
-        - 84.6  * (col("n_syllables") / col("n_words")), 2))
+        - 84.6  * (col("n_syllables") / col("n_words")), 2
+    ))
+
+#Tous les romans
+df_tokens_all = df_annotated.select(
+    "title", "author", "movement",
+    posexplode("tokens").alias("pos", "token")
+).select(
+    "title", "author", "movement",
+    col("pos"), col("token.result").alias("word")
+).filter(col("word").rlike("^[a-zA-Z]+$")) \
+ .withColumn("syllables", syllable_word_udf(col("word")))
+
+df_sliding_all = df_tokens_all \
+    .withColumn("window_id", floor(col("pos") / WINDOW_SIZE)) \
+    .groupBy("title", "author", "movement", "window_id") \
+    .agg(count("*").alias("n_words"), spark_sum("syllables").alias("n_syllables")) \
+    .withColumn("n_sentences_est", (col("n_words") / 15).cast("double")) \
+    .withColumn("flesch_kincaid", spark_round(
+        206.835
+        - 1.015 * (col("n_words") / col("n_sentences_est"))
+        - 84.6  * (col("n_syllables") / col("n_words")), 2
+    ))
+
+# Comparaison multi-tailles - Père Goriot
+df_tokens_one = df_one.select(
+    "title", posexplode("tokens").alias("pos", "token")
+).select(
+    "title", col("pos"), col("token.result").alias("word")
+).filter(col("word").rlike("^[a-zA-Z]+$")) \
+ .withColumn("syllables", syllable_word_udf(col("word")))
+
+all_windows = []
+for window_size in [500, 1000, 2000]:
+    df_w = df_tokens_one \
+        .withColumn("window_id", floor(col("pos") / window_size)) \
+        .groupBy("title", "window_id") \
+        .agg(count("*").alias("n_words"), spark_sum("syllables").alias("n_syllables")) \
+        .withColumn("n_sentences_est", (col("n_words") / 15).cast("double")) \
+        .withColumn("flesch_kincaid", spark_round(
+            206.835
+            - 1.015 * (col("n_words") / col("n_sentences_est"))
+            - 84.6  * (col("n_syllables") / col("n_words")), 2
+        )) \
+        .withColumn("window_size", lit(window_size))
+    all_windows.append(df_w.orderBy("window_id").toPandas())
+
+df_all_windows = pd.concat(all_windows, ignore_index=True)
+df_all_windows["window_size"] = df_all_windows["window_size"].astype(str) + " mots"
 ```
 
 ## A8 — Dialogue vs Narration
@@ -640,21 +862,121 @@ df_bench = spark.read.parquet(str(DATA_DIR / "corpus_raw.parquet"))
 results = [benchmark_format(fmt, df_bench) for fmt in ["csv", "json", "parquet", "orc"]]
 ```
 
-## A10 — Cache et shuffles
+## A10 — Cache, Persist, Checkpoint et Shuffles
 
 ```{python}
 #| echo: true
 #| eval: false
 
-# Cache
+import time
+from pyspark import StorageLevel
+
+# Configuration session 
+spark = SparkSession.builder \
+    .appName("StyleProject") \
+    .master("local[*]") \
+    .config("spark.driver.memory", "8g") \
+    .config("spark.sql.shuffle.partitions", "8") \
+    .config("spark.jars.packages", "com.johnsnowlabs.nlp:spark-nlp_2.12:5.5.3") \
+    .getOrCreate()
+
+# Checkpoint
+CHECKPOINT_DIR = str(DATA_DIR / "checkpoints")
+spark.sparkContext.setCheckpointDir(CHECKPOINT_DIR)
+df_annotated = spark.read.parquet(str(DATA_DIR / "corpus_annotated.parquet"))
+df_annotated_ckpt = df_annotated.checkpoint()
+
+# Cache sans/avec
+df_test = spark.read.parquet(str(DATA_DIR / "corpus_annotated.parquet"))
+start = time.perf_counter()
+df_test.count()
+t1 = round(time.perf_counter() - start, 2)
+start = time.perf_counter()
+df_test.count()
+t2 = round(time.perf_counter() - start, 2)
+
 df_cached = spark.read.parquet(str(DATA_DIR / "corpus_annotated.parquet")).cache()
+start = time.perf_counter()
 df_cached.count()
+t3 = round(time.perf_counter() - start, 2)
+start = time.perf_counter()
+df_cached.count()
+t4 = round(time.perf_counter() - start, 2)
 df_cached.unpersist()
 
-# Shuffles
-spark.conf.set("spark.sql.shuffle.partitions", "8")
+# Persist niveaux
+df_base = spark.read.parquet(str(DATA_DIR / "corpus_annotated.parquet"))
+levels = {
+    "MEMORY_ONLY":     StorageLevel.MEMORY_ONLY,
+    "MEMORY_AND_DISK": StorageLevel.MEMORY_AND_DISK,
+    "DISK_ONLY":       StorageLevel.DISK_ONLY,
+}
+persist_results = []
+for name, level in levels.items():
+    df_p = df_base.persist(level)
+    start = time.perf_counter()
+    df_p.count()
+    t1 = round(time.perf_counter() - start, 2)
+    start = time.perf_counter()
+    df_p.count()
+    t2 = round(time.perf_counter() - start, 2)
+    df_p.unpersist()
+    persist_results.append({"niveau": name, "1er_appel_s": t1, "2eme_appel_s": t2})
+
+# Shuffles explain
+df_words_all = df_annotated.select(
+    "title", explode("tokens").alias("token")
+).select(
+    "title", lower(col("token.result")).alias("word")
+).filter(col("word").rlike("^[a-z]+$"))
+
+df_freq_all = df_words_all.groupBy("title", "word") \
+                          .agg(count("*").alias("freq"))
+df_freq_all.explain()
+
+#Mitigation : partitions
+start = time.perf_counter()
 df_freq_all.count()
-spark.conf.set("spark.sql.shuffle.partitions", "200")
+t_before = round(time.perf_counter() - start, 2)
+spark.conf.set("spark.sql.shuffle.partitions", "8")
+start = time.perf_counter()
+df_freq_all.count()
+t_after = round(time.perf_counter() - start, 2)
+
+#Mitigation : repartition
+df_words_base = df_annotated.select(
+    "title", explode("tokens").alias("token")
+).select(
+    "title", lower(col("token.result")).alias("word")
+).filter(col("word").rlike("^[a-z]+$"))
+
+start = time.perf_counter()
+df_words_base.groupBy("title", "word").agg(count("*").alias("freq")).count()
+t_no_repart = round(time.perf_counter() - start, 2)
+
+start = time.perf_counter()
+df_words_base \
+    .repartition(14, "title") \
+    .groupBy("title", "word").agg(count("*").alias("freq")).count()
+t_repart = round(time.perf_counter() - start, 2)
+
+#Mitigation : broadcast join
+import pandas as pd
+from pyspark.sql.functions import broadcast
+
+meta = pd.DataFrame([
+    {"title": b["title"], "movement": b["movement"], "lang": b["lang"]}
+    for b in CORPUS
+])
+df_meta = spark.createDataFrame(meta)
+
+start = time.perf_counter()
+df_annotated.join(df_meta, on="title").count()
+t_no_broadcast = round(time.perf_counter() - start, 2)
+
+start = time.perf_counter()
+df_annotated.join(broadcast(df_meta), on="title").count()
+t_broadcast = round(time.perf_counter() - start, 2)
 ```
 
 ## A11 — Pipelines graphiques
