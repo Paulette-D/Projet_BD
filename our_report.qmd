@@ -105,7 +105,7 @@ $$FK = 206.835 - 1.015 \times \frac{mots}{phrases} - 84.6 \times \frac{syllabes}
 Un score élevé indique un texte facile à lire. Les scores varient 
 généralement entre 0 (très difficile) et 100 (très facile).
 
-![Indice Flesch-Kincaid par auteur](images/fk_plot.png)
+![Indice Flesch-Kincaid par auteur](images/fk_plot.png){fig-cap="Scores FK moyens par auteur, colorés par mouvement littéraire"}
 
 Les scores FK obtenus sont globalement moyens (entre 40 et 70), cohérents 
 avec des textes littéraires du XIXe siècle. **Maupassant** (41) et 
@@ -189,7 +189,7 @@ Spark peut lire et écrire des données dans plusieurs formats. Nous
 comparons ici **CSV**, **JSON**, **Parquet** et **ORC** sur trois critères :
 temps d'écriture, temps de lecture et taille sur disque.
 
-![Comparaison des formats](images/benchmark_formats.png)
+![Comparaison des formats](images/benchmark_form.png)
 
 | Format  | Écriture (s) | Lecture (s) | Taille (MB) |
 |---------|-------------|-------------|-------------|
