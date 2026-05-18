@@ -5,7 +5,7 @@ date: today
 format: html
 ---
 
-# Introduction — Description des données et pipeline d'extraction
+# Introduction: Description des données et pipeline d'extraction
 
 ## Corpus
 
@@ -107,11 +107,20 @@ généralement entre 0 (très difficile) et 100 (très facile).
 
 ![Indice Flesch-Kincaid par auteur](images/fk_plot.png){fig-cap="Scores FK moyens par auteur, colorés par mouvement littéraire"}
 
-Les scores FK obtenus sont globalement moyens (entre 40 et 70), cohérents 
-avec des textes littéraires du XIXe siècle. **Maupassant** (41) et 
-**Scott** (50) sont les plus difficiles à lire, tandis que **Sand** (69) 
-et **Balzac** (68) sont les plus accessibles. On ne observe pas de 
-séparation nette entre romantiques et réalistes.
+Les scores FK obtenus varient entre 41 (Maupassant) et 69 (Sand et Balzac). 
+Plusieurs observations méritent attention :
+
+- **Sand** obtient le score le plus élevé (69) mais son roman *Indiana* est 
+  aussi le plus court du corpus (14 000 mots), ce résultat est donc à 
+  nuancer car un texte court peut avoir un style plus homogène.
+- **Maupassant** (41) et **Scott** (50) produisent les textes les plus 
+  complexes, Scott est connu pour ses longues descriptions historiques 
+  et son style soutenu dans *Ivanhoe*.
+- Les **réalistes** (moyenne ~57) ont des scores légèrement inférieurs aux 
+  **romantiques** (moyenne ~62), suggérant un style globalement plus dense, 
+  cohérent avec leur ambition de décrire la réalité sociale avec précision.
+- Les deux indices FK et KM donnent le même classement des auteurs
+  attendu puisqu'ils partagent la même formule de base.
 
 ### Kandel-Moles
 
@@ -123,8 +132,14 @@ les textes en français qui ont tendance à avoir des mots plus longs.
 
 ![Indice Kandel-Moles par auteur](images/km_plot.png)
 
-Les scores KM sont systématiquement plus élevés que FK — les deux indices 
-donnent le même classement des auteurs.
+Les scores KM sont systématiquement plus élevés que FK d'environ 17 points 
+en moyenne. Cet écart constant s'explique par la différence de coefficient 
+des syllabes (73.6 vs 84.6), KM pénalise moins les mots longs, ce qui 
+gonfle mécaniquement le score final. Le classement des auteurs reste 
+identique entre les deux indices, ce qui confirme leur cohérence. 
+Dans notre cas tous les textes sont en anglais, KM étant conçu pour le 
+français, ses scores sont légèrement surestimés par rapport à ce qu'ils 
+seraient sur des textes originaux français.
 
 ## Loi de Zipf
 
@@ -139,9 +154,18 @@ une droite de pente négative quasi-parfaite.
 
 ![Loi de Zipf — tous les romans](images/zipf_all.png)
 
-Toutes les courbes sont quasi-parallèles, ce qui confirme que la loi de 
-Zipf s'applique à l'ensemble du corpus. **Indiana** (Sand) se détache en 
-dessous des autres en raison de sa taille réduite (14 000 mots).
+La loi de Zipf est vérifiée pour tous les romans du corpus:
+
+- Les 10 mots les plus fréquents sont des mots grammaticaux (*the*, *to*, 
+  *of*, *a*, *and*...), ce sont des mots fonctionnels universels dans 
+  tout texte en anglais.
+- La pente des courbes est légèrement différente entre les auteurs,
+  une pente plus raide indique un vocabulaire plus concentré autour de 
+  quelques mots fréquents, une pente plus douce indique un vocabulaire 
+  plus riche et varié.
+- **Indiana** (Sand) affiche les fréquences les plus basses à rang égal,
+  conséquence directe de sa taille réduite (14 000 mots vs 150 000+ pour 
+  les autres).
 
 ## Fenêtres glissantes
 
@@ -176,9 +200,21 @@ adaptée en conséquence.
 
 ![Proportion dialogue vs narration par auteur](images/dialog_narr.png)
 
-Les romantiques anglais (Brontë, Scott, Balzac) ont les proportions de 
-dialogue les plus élevées (40-47%), tandis que les réalistes français 
-(Zola, Flaubert, Maupassant) sont plus narratifs (moins de 20%).
+Les résultats révèlent une distinction claire entre les auteurs anglais 
+et français :
+
+- Les **romantiques anglais** (Brontë C. 41%, Brontë E. 44%, Scott 44%, 
+  Balzac 40%) ont les proportions de dialogue les plus élevées, leurs 
+  romans sont construits autour des interactions entre personnages.
+- Les **réalistes français** (Zola Assommoir 13%, Flaubert 17%, Maupassant 
+  16%) privilégient la narration cohérent avec leur ambition de décrire 
+  les milieux sociaux de manière objective et documentaire.
+- **Germinal, Rouge et Noir et Monte Cristo** affichent 0%, non pas 
+  parce qu'ils n'ont pas de dialogues, mais parce que ces textes utilisent 
+  les tirets `—` comme convention typographique française, non détectés 
+  par notre regex.
+- **Indiana** (Sand, 25%) se situe entre les deux groupes malgré son 
+  appartenance au mouvement romantique.
 
 
 # Spark — Analyse des performances
