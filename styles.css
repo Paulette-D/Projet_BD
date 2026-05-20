@@ -1,0 +1,26 @@
+.reveal {
+  font-size: 30px;
+}
+
+.reveal h1,
+.reveal h2,
+.reveal h3 {
+  letter-spacing: 0;
+}
+
+.reveal table {
+  font-size: 0.62em;
+}
+
+.reveal .smaller {
+  font-size: 0.78em;
+}
+
+.reveal img {
+  max-height: 58vh;
+  object-fit: contain;
+}
+
+.reveal pre code {
+  max-height: 55vh;
+}
