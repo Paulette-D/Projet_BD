@@ -105,7 +105,7 @@ flowchart LR
 ```
 
 ::: {.callout-note appearance="minimal"}
-Les fichiers bruts ne sont pas committés dans git car la pipeline est conçue pour être reproductible, mais relancer le notebook depuis zéro reconstruit tout le corpus depuis Gutenberg. 
+Les fichiers bruts ne sont pas committés dans git car la pipeline est conçue pour être reproductible, mais relancer le notebook depuis zéro sur un nouvel appareil reconstruit tout le corpus depuis Gutenberg. Sinon, download_all() permets de repartir des fichiers sauvegardés dans le Google Drive. 
 :::
 
 # 02 · DataFrame Spark & Formats {background-color="#1A2B5E"}
@@ -143,27 +143,6 @@ Sortie réelle : Spark 3.5.0, Colab, 8 cores
 :::
 :::
 
-## Benchmark des formats de fichiers
-
-::: {.columns}
-::: {.column width="50%"}
-![Comparaison CSV · JSON · Parquet · ORC](images/benchmark_form.png)
-:::
-::: {.column width="50%"}
-| Format | Écriture | Lecture | Taille |
-|--------|----------|---------|--------|
-| CSV | 1.12s | 0.64s | 10.03 MB |
-| JSON | 0.82s | 0.53s | 10.23 MB |
-| **Parquet** | **0.82s** | **0.25s** | **6.36 MB** |
-| ORC | 1.09s | 0.54s | 6.38 MB |
-
-::: {.callout-important appearance="minimal"}
-**Parquet** : lecture **2.5× plus rapide** que CSV, taille **37% plus compacte**. Choix retenu pour tous les DataFrames intermédiaires.
-:::
-
-ORC est équivalent mais historiquement lié à Hive/Hadoop.
-:::
-:::
 
 # 03 · Annotation Spark-NLP {background-color="#1A2B5E"}
 
@@ -391,6 +370,30 @@ Réalistes français : **13–17%**
 :::
 
 # 05 · Optimisation Spark {background-color="#1A2B5E"}
+
+## Benchmark des formats de fichiers
+
+::: {.columns}
+::: {.column width="50%"}
+![Comparaison CSV · JSON · Parquet · ORC](images/benchmark_form.png)
+:::
+::: {.column width="50%"}
+| Format | Écriture | Lecture | Taille |
+|--------|----------|---------|--------|
+| CSV | 1.12s | 0.64s | 10.03 MB |
+| JSON | 0.82s | 0.53s | 10.23 MB |
+| **Parquet** | **0.82s** | **0.25s** | **6.36 MB** |
+| ORC | 1.09s | 0.54s | 6.38 MB |
+
+::: {.callout-important appearance="minimal"}
+**Parquet** : lecture **2.5× plus rapide** que CSV, taille **37% plus compacte**. Choix retenu pour tous les DataFrames intermédiaires.
+:::
+
+ORC est équivalent mais historiquement lié à Hive/Hadoop.
+:::
+:::
+
+
 
 ## Cache & Persist
 
