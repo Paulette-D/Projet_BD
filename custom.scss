@@ -1,0 +1,83 @@
+/*-- scss:defaults --*/
+$font-family-sans-serif: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+$presentation-heading-font: "Georgia", "Cambria", serif;
+$presentation-heading-color: #1A2B5E;
+$link-color: #2451A8;
+$body-color: #1a1a1a;
+$presentation-font-size-root: 20px;
+$presentation-line-height: 1.45;
+
+/*-- scss:rules --*/
+
+/* Plan slide */
+.plan-slide {
+  font-size: 1.05em;
+  line-height: 1.8;
+}
+
+/* Section headers */
+.reveal .slide-background-content {
+  opacity: 0.95;
+}
+
+/* Callouts */
+.callout {
+  border-radius: 6px;
+  font-size: 0.82em;
+  margin-top: 0.6em;
+}
+
+/* Tables */
+.reveal table {
+  font-size: 0.78em;
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.reveal table th {
+  background: #1A2B5E;
+  color: white;
+  padding: 5px 10px;
+}
+
+.reveal table td {
+  padding: 4px 10px;
+  border-bottom: 1px solid #dde;
+}
+
+.reveal table tr:nth-child(even) td {
+  background: #f4f6fb;
+}
+
+/* Code blocks */
+.reveal pre code {
+  font-size: 0.72em;
+  line-height: 1.4;
+}
+
+/* Mermaid diagrams */
+.mermaid {
+  font-size: 0.8em;
+}
+
+/* Footer */
+.reveal .footer {
+  font-size: 0.55em;
+  color: #888;
+}
+
+/* Fragment */
+.reveal .fragment {
+  font-style: italic;
+  color: #C0392B;
+  margin-top: 0.4em;
+}
+
+/* Slide numbers */
+.reveal .slide-number {
+  font-size: 0.6em;
+  background: #1A2B5E;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+}

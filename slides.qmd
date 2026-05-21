@@ -1,686 +1,545 @@
 ---
-title: "Spark, formats de fichiers et NLP"
-subtitle: "Analyse stylométrique de romans du XIXe siècle"
+title: "Spark, Formats de Fichiers et NLP"
+subtitle: "Analyse stylométrique de romans du XIXe siècle : La stylométrie peut-elle distinguer le Romantisme du Réalisme ?"
 author: "Paulette Diouf, Aya Louzary, Yousra Tersi"
-date: today
+date: "22-05-2026"
 format:
   revealjs:
-    theme: simple
+    theme: [default, custom.scss]
     slide-number: true
-    scrollable: true
-    chalkboard: true
-    preview-links: auto
-    css: styles.css
+    progress: true
+    transition: slide
+    transition-speed: fast
+    center: false
+    fig-align: center
+    footer: "IFEBY310, Big Data Project, 2026"
 execute:
   echo: false
   warning: false
   message: false
 ---
 
-## Plan
+## Plan {.plan-slide}
 
-1. Introduction et corpus
-2. Pipeline d'extraction
-3. Construction du DataFrame Spark
-4. Annotation avec Spark-NLP
-5. Analyse stylométrique
-6. Analyse des performances Spark
-7. Conclusion
+::: {.columns}
+::: {.column width="50%"}
+**01** · Corpus & Pipeline ETL  
+**02** · DataFrame Spark & Formats  
+**03** · Annotation Spark-NLP  
+**04** · Analyse stylométrique  
+:::
+::: {.column width="50%"}
+**05** · Optimisation Spark  
+**06** · Conclusion  
+:::
+:::
 
----
+# 01 · Corpus & Pipeline ETL {background-color="#1A2B5E"}
 
-# Introduction
+## Problématique
 
-## Objectif du projet
+::: {.columns}
+::: {.column width="60%"}
+> **La stylométrie computationnelle peut-elle distinguer automatiquement le Romantisme du Réalisme du XIXe siècle et Spark est-il un outil adapté à ce type d'analyse littéraire ?**
 
-Ce projet construit un pipeline complet de traitement de texte avec Spark, depuis l'extraction de romans du XIXe siècle jusqu'à l'analyse stylométrique.
+Deux sous-questions guident le projet :
 
-Les textes sont comparés selon deux mouvements littéraires :
+- Les indices de lisibilité, la loi de Zipf et la répartition dialogue/narration séparent-ils les deux mouvements ?
+- Une stratégie d'optimisation Spark efficace sur un grand corpus l'est-elle aussi sur 14 romans ?
+:::
+::: {.column width="40%"}
+::: {.callout-note appearance="minimal"}
+**14 romans** · 2 mouvements  
+**~1,6 M mots** au total  
+Spark 3.5.0 · Spark-NLP 5.5.3  
+Google Colab · 8 cores  
+:::
+:::
+:::
 
-- **Romantisme** : Balzac, Dumas, Stendhal, Sand, Brontë, Scott
-- **Réalisme** : Flaubert, Zola, Dickens, Maupassant
+## Le corpus {.smaller}
 
-L'objectif est double :
+::: {.columns}
+::: {.column width="55%"}
+| Auteur | Titre | Mots |
+|--------|-------|-----:|
+| Balzac | Père Goriot | 103 598 |
+| Balzac | Eugénie Grandet | 66 578 |
+| Dumas | Monte-Cristo | 121 587 |
+| Stendhal | Rouge et Noir | 171 925 |
+| Sand | Indiana | 14 032 |
+| Brontë C. | Jane Eyre | 185 396 |
+| Brontë E. | Wuthering Heights | 115 949 |
+| Scott | Ivanhoe | 191 646 |
+| Flaubert | Madame Bovary | 115 667 |
+| Zola | Germinal | 164 610 |
+| Zola | L'Assommoir | 155 848 |
+| Dickens | Great Expectations | 184 482 |
+| Dickens | Oliver Twist | 157 973 |
+| Maupassant | Bel-Ami | 48 412 |
+:::
+::: {.column width="45%"}
+**Romantisme** : Balzac, Dumas, Stendhal, Sand, Brontë C., Brontë E., Scott  
 
-- tester un pipeline Spark-NLP sur un corpus littéraire ;
-- mesurer des indicateurs de style : lisibilité, loi de Zipf, variations internes, dialogue vs narration.
+**Réalisme** : Flaubert, Zola (×2), Dickens (×2), Maupassant
 
----
+::: {.callout-important appearance="minimal"}
+**Biais notable** : *Indiana* (Sand, 14 032 mots) est 13× plus court qu'*Ivanhoe*. Les résultats pour Sand devront être interprétés avec prudence.
+:::
 
-## Corpus {.smaller}
+Textes en version **anglaise** : *les indices KM, conçus pour le français, seront donc légèrement surestimés.*
+:::
+:::
 
-Le corpus contient **14 romans** téléchargés depuis [Project Gutenberg](https://www.gutenberg.org/) en version anglaise.
+## Pipeline ETL
 
-| Auteur | Titre | Mouvement | Mots |
-|---|---|---|---:|
-| Balzac | Père Goriot | Romantique | 103 598 |
-| Balzac | Eugénie Grandet | Romantique | 66 578 |
-| Dumas | Le Comte de Monte-Cristo | Romantique | 121 587 |
-| Stendhal | Le Rouge et le Noir | Romantique | 171 925 |
-| Sand | Indiana | Romantique | 14 032 |
-| Brontë C. | Jane Eyre | Romantique | 185 396 |
-| Brontë E. | Wuthering Heights | Romantique | 115 949 |
-| Scott | Ivanhoe | Romantique | 191 646 |
-| Flaubert | Madame Bovary | Réaliste | 115 667 |
-| Zola | Germinal | Réaliste | 164 610 |
-| Zola | L'Assommoir | Réaliste | 155 848 |
-| Dickens | Great Expectations | Réaliste | 184 482 |
-| Dickens | Oliver Twist | Réaliste | 157 973 |
-| Maupassant | Bel-Ami | Réaliste | 48 412 |
-
----
-
-# Pipeline d'extraction
-
-## Extraction des textes
-
-Le pipeline ETL automatise la récupération des textes depuis Project Gutenberg.
-
-Étapes principales :
-
-1. définition d'une liste de métadonnées : auteur, titre, identifiant Gutenberg, mouvement, langue ;
-2. téléchargement de chaque roman ;
-3. suppression des en-têtes et pieds de page Gutenberg ;
-4. sauvegarde des textes nettoyés dans Google Drive ;
-5. exclusion des textes bruts du dépôt git.
-
-Cette étape garantit que le corpus peut être reconstruit sans stocker directement les romans dans le projet.
-
----
-
-## Logique du pipeline
-
-```text
-Project Gutenberg
-        |
-        v
-Téléchargement automatique
-        |
-        v
-Nettoyage des marqueurs START/END
-        |
-        v
-Fichiers texte sur Google Drive
-        |
-        v
-DataFrame Spark
+```{mermaid}
+flowchart LR
+    A["🌐 Project Gutenberg"] --> B["download() requests"]
+    B --> C["Nettoyage marqueurs START/END"]
+    C --> D["Fichiers .txt Google Drive"]
+    D --> E["SparkDataFrame + métadonnées"]
+    E --> F["💾 Parquet Drive"]
+    style A fill:#1A2B5E,color:#fff
+    style F fill:#C0392B,color:#fff
 ```
 
-Le nettoyage retire les blocs standardisés ajoutés par Gutenberg afin de conserver uniquement le contenu littéraire.
+::: {.callout-note appearance="minimal"}
+Les fichiers bruts ne sont pas committés dans git car la pipeline est conçue pour être reproductible, mais relancer le notebook depuis zéro reconstruit tout le corpus depuis Gutenberg. 
+:::
 
----
+# 02 · DataFrame Spark & Formats {background-color="#1A2B5E"}
 
-# Chargement et transformation
+## Schéma du DataFrame & sortie réelle
 
-## Construction du DataFrame Spark
-
-Chaque texte est chargé dans un DataFrame Spark avec ses métadonnées.
-
-Le DataFrame permet ensuite :
-
-- d'associer chaque roman à son auteur et à son mouvement ;
-- de conserver le texte complet dans une colonne `text` ;
-- de calculer les grandeurs de base : caractères et mots ;
-- de rendre les traitements NLP parallélisables.
-
----
-
-## Schéma du DataFrame {.smaller}
-
+::: {.columns}
+::: {.column width="48%"}
 | Colonne | Type | Description |
-|---|---|---|
-| `author` | String | Nom de l'auteur |
-| `title` | String | Titre du roman |
-| `movement` | String | `romantic` ou `realist` |
-| `lang` | String | Langue du texte (`en`) |
+|---------|------|-------------|
+| `author` | String | Auteur |
+| `title` | String | Titre |
+| `movement` | String | `romantic` / `realist` |
+| `lang` | String | `en` |
 | `text` | String | Texte brut complet |
-| `n_chars` | Long | Nombre de caractères |
-| `n_words` | Long | Nombre de mots |
+| `n_chars` | Long | Nb caractères |
+| `n_words` | Long | Nb mots |
+:::
+::: {.column width="52%"}
+```text
++----------+-----------------+--------+------+-------+
+|    author|            title|movement|n_chars|n_words|
++----------+-----------------+--------+------+-------+
+|    Balzac|      Pere_Goriot|romantic|571261|103598|
+|    Balzac|  Eugenie_Grandet|romantic|348752| 66578|
+|     Dumas|     Monte_Cristo|romantic|727540|121587|
+|  Stendhal|    Rouge_et_Noir|romantic|997985|171925|
+|      Sand|         Indiana|romantic| 79888| 14032|
++----------+-----------------+--------+------+-------+
+```
 
-Le choix de Spark permet de conserver une structure tabulaire claire tout en manipulant des textes longs.
+::: {.callout-note appearance="minimal"}
+Sortie réelle : Spark 3.5.0, Colab, 8 cores
+:::
+:::
+:::
 
----
+## Benchmark des formats de fichiers
 
-## Choix du format de stockage
+::: {.columns}
+::: {.column width="50%"}
+![Comparaison CSV · JSON · Parquet · ORC](images/benchmark_form.png)
+:::
+::: {.column width="50%"}
+| Format | Écriture | Lecture | Taille |
+|--------|----------|---------|--------|
+| CSV | 1.12s | 0.64s | 10.03 MB |
+| JSON | 0.82s | 0.53s | 10.23 MB |
+| **Parquet** | **0.82s** | **0.25s** | **6.36 MB** |
+| ORC | 1.09s | 0.54s | 6.38 MB |
 
-Les DataFrames intermédiaires sont sauvegardés en **Parquet**.
+::: {.callout-important appearance="minimal"}
+**Parquet** : lecture **2.5× plus rapide** que CSV, taille **37% plus compacte**. Choix retenu pour tous les DataFrames intermédiaires.
+:::
 
-Pourquoi Parquet ?
+ORC est équivalent mais historiquement lié à Hive/Hadoop.
+:::
+:::
 
-- format orienté colonne ;
-- compression Snappy ;
-- lecture plus rapide que CSV et JSON ;
-- pushdown de prédicats ;
-- format très adapté aux pipelines Spark.
-
-Ce choix est validé plus loin par le benchmark des formats.
-
----
-
-# Annotation avec Spark-NLP
+# 03 · Annotation Spark-NLP {background-color="#1A2B5E"}
 
 ## Pipeline d'annotation
 
-Le pipeline utilise **Spark-NLP 5.5.3** avec **PySpark 3.5.0**.
+::: {.columns}
+::: {.column width="55%"}
+```{mermaid}
+flowchart TD
+    A["text (String brut)"] --> B["Document Assembler → document"]
+    B --> C["SentenceDetector → sentences"]
+    C --> D["Tokenizer → tokens"]
+    D --> E["💾 df_annotated Parquet · Drive"]
+    style A fill:#2451A8,color:#fff
+    style E fill:#C0392B,color:#fff
+```
+:::
+::: {.column width="45%"}
+**Spark-NLP 5.5.3** + PySpark 3.5.0
 
-Trois étapes sont appliquées à chaque roman :
+L'annotation est l'opération la plus longue du pipeline donc le résultat est sauvegardé en Parquet pour éviter de la relancer.
 
-1. **DocumentAssembler** : transforme le texte brut en document Spark-NLP ;
-2. **SentenceDetector** : découpe le document en phrases ;
-3. **Tokenizer** : découpe les phrases en mots.
+`df_annotated` devient la base commune de toutes les analyses :
 
-L'annotation est l'opération la plus longue du pipeline. Le résultat est donc sauvegardé en Parquet pour éviter de relancer cette étape à chaque session.
+- indices FK et KM
+- loi de Zipf
+- fenêtres glissantes
+- dialogue / narration
 
----
+::: {.callout-note appearance="minimal"}
+C'est pourquoi ce DataFrame est le candidat idéal pour le cache et le checkpoint.
+:::
+:::
+:::
 
-## DataFrame annoté
+## Configuration Spark optimisée
 
-| Colonne | Contenu |
-|---|---|
-| `document` | Texte entier encapsulé dans le format Spark-NLP |
-| `sentences` | Liste des phrases détectées |
-| `tokens` | Liste des mots avec leur position |
+::: {.columns}
+::: {.column width="55%"}
+```python
+spark = SparkSession.builder \
+  .master("local[*]")
+  .config("spark.driver.memory", "8g")
+  .config("spark.sql.shuffle.partitions", "8")
+  .getOrCreate()
 
-Ce DataFrame annoté devient la base commune des analyses :
+# Sortie réelle :
+# Spark version : 3.5.0
+# Cores disponibles : 8
+# shuffle.partitions : 8
+```
+:::
+::: {.column width="45%"}
+| Paramètre | Défaut | Choix | Raison |
+|-----------|--------|-------|--------|
+| master | `local[1]` | `local[*]` | Tous les cores |
+| driver.memory | 1g | **8g** | Colonnes NLP lourdes |
+| shuffle.partitions | 200 | **8** | 14 romans ≠ 200 partitions vides |
 
-- indices FK et KM ;
-- loi de Zipf ;
-- fenêtres glissantes ;
-- dialogue vs narration ;
-- mesures de performance.
+::: {.callout-important appearance="minimal"}
+Sans `local[*]` → 1 seul core au lieu de 8.  
+Sans `8g` → `OutOfMemoryError` sur `df_annotated`.
+:::
+:::
+:::
 
----
-
-# Analyse stylométrique
+# 04 · Analyse Stylométrique {background-color="#1A2B5E"}
 
 ## Indices de lisibilité
 
-Les indices de lisibilité mesurent la difficulté de lecture d'un texte.
+::: {.columns}
+::: {.column width="50%"}
+**Flesch-Kincaid (FK)**
+$$FK = 206.835 - 1.015 \frac{mots}{phrases} - 84.6 \frac{syllabes}{mots}$$
 
-Deux indices sont calculés :
+Score élevé = texte facile. Calibré pour l'anglais.
+:::
+::: {.column width="50%"}
+**Kandel-Moles (KM)**
+$$KM = 207 - 1.015 \frac{mots}{phrases} - 73.6 \frac{syllabes}{mots}$$
 
-- **Flesch-Kincaid (FK)** ;
-- **Kandel-Moles (KM)**.
-
-Ils reposent sur deux dimensions :
-
-- la longueur moyenne des phrases ;
-- la complexité des mots, approximée par le nombre de syllabes.
-
----
-
-## Flesch-Kincaid
-
-$$
-FK = 206.835 - 1.015 \times \frac{mots}{phrases}
-- 84.6 \times \frac{syllabes}{mots}
-$$
-
-Un score élevé indique un texte plus facile à lire.
-
-Résultats principaux :
-
-- les scores varient entre **41** pour Maupassant et **69** pour Sand et Balzac ;
-- les réalistes obtiennent une moyenne légèrement plus basse, autour de **57** ;
-- les romantiques sont autour de **62** ;
-- Maupassant et Scott apparaissent comme les textes les plus complexes.
-
----
-
-## Flesch-Kincaid par auteur
-
-![Indice Flesch-Kincaid par auteur](images/fk_plot.png){fig-alt="Scores Flesch-Kincaid moyens par auteur"}
-
-::: {.notes}
-Si l'image n'apparaît pas, placer le dossier `images` du rapport à côté de ce fichier `slides.qmd`.
+Adaptation française : coefficient syllabes **73.6 vs 84.6** → mots longs moins pénalisés → scores mécaniquement +17 pts.
+:::
 :::
 
----
-
-## Analyse FK
-
-Plusieurs points doivent être nuancés :
-
-- **Sand** obtient le score le plus élevé, mais *Indiana* est aussi le roman le plus court du corpus ;
-- un texte court peut donner un style plus homogène et donc un score plus stable ;
-- **Scott** est pénalisé par un style historique dense et descriptif ;
-- l'écart entre mouvements existe, mais il ne suffit pas à séparer nettement romantisme et réalisme.
-
----
-
-## Kandel-Moles
-
-$$
-KM = 207 - 1.015 \times \frac{mots}{phrases}
-- 73.6 \times \frac{syllabes}{mots}
-$$
-
-Kandel-Moles est une adaptation française du Flesch-Kincaid.
-
-Différence principale :
-
-- le coefficient des syllabes est plus faible : **73.6** au lieu de **84.6** ;
-- les mots longs sont donc moins pénalisés ;
-- les scores KM sont mécaniquement plus élevés.
-
----
-
-## Kandel-Moles par auteur
-
-![Indice Kandel-Moles par auteur](images/km_plot.png){fig-alt="Scores Kandel-Moles moyens par auteur"}
-
-Les scores KM sont environ **17 points plus élevés** que les scores FK.
-
-Le classement des auteurs reste identique, ce qui confirme la cohérence entre les deux indices. Dans ce projet, KM est cependant à interpréter avec prudence car les textes analysés sont en anglais.
-
----
-
-## Loi de Zipf
-
-La loi de Zipf affirme que la fréquence d'un mot est inversement proportionnelle à son rang.
-
-Sur un graphique log-log :
-
-- les mots les plus fréquents sont au début ;
-- la fréquence diminue régulièrement ;
-- la relation prend la forme d'une droite de pente négative.
-
-Cette loi permet de vérifier la structure statistique globale du corpus.
-
----
-
-## Zipf - Père Goriot
-
-![Loi de Zipf - Père Goriot](images/zipf_pg.png){fig-alt="Courbe log-log de Zipf pour Père Goriot"}
-
-La courbe de *Père Goriot* confirme la loi de Zipf : on observe une relation presque linéaire en échelle log-log.
-
-Les mots les plus fréquents sont principalement des mots fonctionnels anglais : *the*, *to*, *of*, *a*, *and*.
-
----
-
-## Zipf - tous les romans
-
-![Loi de Zipf - tous les romans](images/zipf_all.png){fig-alt="Courbes de Zipf pour tous les romans"}
-
-La loi de Zipf est vérifiée pour tous les romans.
-
-Analyse :
-
-- une pente plus raide indique un vocabulaire plus concentré ;
-- une pente plus douce indique un vocabulaire plus varié ;
-- *Indiana* présente des fréquences plus basses à rang égal, ce qui reflète sa taille réduite.
-
----
-
-## Fenêtres glissantes
-
-Les scores calculés sur un roman entier masquent les variations internes.
-
-Les fenêtres glissantes permettent d'observer l'évolution du style au fil du texte.
-
-Question principale :
-
-> À partir de quelle taille de fenêtre l'indice devient-il stable ?
-
-Trois tailles sont comparées :
-
-- 500 mots ;
-- 1000 mots ;
-- 2000 mots.
-
----
-
-## FK glissant - Père Goriot
-
-![FK fenêtres glissantes - Père Goriot](images/fk_sliding_pg.png){fig-alt="Indice Flesch-Kincaid par fenêtre dans Père Goriot"}
-
-Le score FK de *Père Goriot* oscille entre **55** et **80**, autour d'une moyenne stable proche de **67**.
-
-La chute en fin de roman correspond probablement à des passages plus denses.
-
----
-
-## FK glissant - tous les romans
-
-![FK fenêtres glissantes - tous les romans](images/fk_sliding_all.png){fig-alt="Indice Flesch-Kincaid par fenêtre pour tous les romans"}
-
-Tous les romans suivent un comportement comparable :
-
-- oscillations entre environ **45** et **85** ;
-- moyenne autour de **65** ;
-- absence de séparation nette entre les deux mouvements.
-
----
-
-## Stabilité selon la taille de fenêtre {.smaller}
-
-![FK stabilité selon taille de fenêtre - Père Goriot](images/fk_sliding_wind.png){fig-alt="Comparaison des tailles de fenêtre pour Père Goriot"}
-
-| Taille de fenêtre | Moyenne | Écart-type | Min | Max |
-|---|---:|---:|---:|---:|
-| 500 mots | 67.40 | 6.84 | 35.84 | 81.84 |
-| 1000 mots | 67.39 | 6.00 | 40.26 | 80.93 |
-| 2000 mots | 67.14 | 5.86 | 40.26 | 80.00 |
-
----
-
-## Analyse des fenêtres
-
-Plus la fenêtre est grande, plus la courbe est lisse.
-
-Résultat important :
-
-- la moyenne reste presque identique quelle que soit la taille ;
-- la granularité change, mais pas le style global ;
-- une fenêtre de **1000 mots** constitue le meilleur compromis.
-
-Elle capture les variations stylistiques sans être trop sensible au bruit local.
-
----
-
-## Dialogue vs narration
-
-La détection des dialogues a été plus complexe que prévu.
-
-Problèmes rencontrés :
-
-- les guillemets ASCII `"..."` ne détectaient presque rien ;
-- Gutenberg utilise souvent des guillemets typographiques Unicode ;
-- certains romans français utilisent des tirets pour les dialogues ;
-- ces conventions typographiques peuvent produire des faux zéros.
-
-La regex a donc été adaptée aux guillemets typographiques et aux tirets.
-
----
-
-## Dialogue vs narration par auteur
-
-![Proportion dialogue vs narration par auteur](images/dialog_narr.png){fig-alt="Proportion de dialogue et de narration par auteur"}
-
-Les résultats distinguent surtout les conventions typographiques et les traditions narratives.
-
-Les romantiques anglais présentent des proportions de dialogue élevées, tandis que plusieurs réalistes français privilégient la narration.
-
----
-
-## Analyse dialogue / narration
-
-Observations principales :
-
-- **Brontë C.**, **Brontë E.**, **Scott** et **Balzac** atteignent environ **40 à 44 %** de dialogue ;
-- **Zola**, **Flaubert** et **Maupassant** ont des proportions plus faibles, autour de **13 à 17 %** ;
-- **Germinal**, **Le Rouge et le Noir** et **Monte-Cristo** affichent parfois **0 %** à cause des conventions de tirets ;
-- **Indiana** se situe entre les deux groupes, autour de **25 %**.
-
-Cette partie montre que l'analyse stylométrique dépend aussi fortement du prétraitement typographique.
-
----
-
-# Spark - Analyse des performances
-
-## Configuration de la session Spark
-
-La configuration par défaut de `sparknlp.start()` est peu transparente.
-
-Le projet configure explicitement Spark :
-
-```text
-Spark version : 3.5.0
-Cores disponibles : 2
-shuffle.partitions : 8
-```
-
-Paramètres clés :
-
-- `local[*]` pour utiliser tous les cores disponibles ;
-- `spark.driver.memory = 8g` pour éviter les erreurs mémoire ;
-- `spark.sql.shuffle.partitions = 8` pour adapter Spark à un petit corpus.
-
----
-
-## Comparaison des formats
-
-Spark peut lire et écrire plusieurs formats.
-
-Formats comparés :
-
-- CSV ;
-- JSON ;
-- Parquet ;
-- ORC.
-
-Critères mesurés :
-
-- temps d'écriture ;
-- temps de lecture ;
-- taille sur disque.
-
----
-
-## Benchmark des formats {.smaller}
-
-![Comparaison des formats](images/benchmark_form.png){fig-alt="Benchmark CSV JSON Parquet ORC"}
-
-| Format | Écriture (s) | Lecture (s) | Taille (MB) |
-|---|---:|---:|---:|
-| CSV | 1.02 | 0.58 | 10.03 |
-| JSON | 0.69 | 0.59 | 10.23 |
-| Parquet | 0.77 | 0.29 | 6.37 |
-| ORC | 0.92 | 0.46 | 6.39 |
-
----
-
-## Analyse des formats
-
-**Parquet** est le meilleur choix dans ce projet.
-
-Raisons :
-
-- lecture la plus rapide : **0.29 s** ;
-- environ deux fois plus rapide que CSV et JSON en lecture ;
-- taille la plus compacte : **6.37 MB** ;
-- environ **37 %** plus léger que CSV ;
-- format natif et optimisé pour Spark.
-
-ORC obtient des résultats proches, mais Parquet reste plus simple et plus standard dans ce pipeline.
-
----
-
-## Cache et persist
-
-Par défaut, Spark recalcule un DataFrame à chaque action.
-
-Le cache stocke un DataFrame en mémoire pour éviter ces recalculs.
+::: {.callout-note appearance="minimal"}
+Les deux indices partagent la même formule de base → **classement des auteurs identique**. KM est à interpréter avec prudence ici car les textes sont en anglais.
+:::
+
+## Résultats des FK par auteur 
+
+::: {.columns}
+::: {.column width="55%"}
+![Scores Flesch-Kincaid moyens par auteur](images/fk_plot.png)
+:::
+::: {.column width="45%"}
+Scores réels issus du notebook :
+
+| Auteur | FK | Mouvement |
+|--------|----|-----------|
+| Sand | 69.3 | Romantique |
+| Balzac (EG) | 69.3 | Romantique |
+| Balzac (PG) | 66.8 | Romantique |
+| Flaubert | ~58 | Réaliste |
+| Scott | ~50 | Romantique |
+| Maupassant | ~41 | Réaliste |
+
+::: {.callout-important appearance="minimal"}
+Le score de Sand (69) est à nuancer : *Indiana* est **13× plus court** que la moyenne. Un corpus homogène donne des scores plus stables.
+:::
+:::
+:::
+
+## FK Interprétation
+
+::: {.columns}
+::: {.column width="50%"}
+**Ce que les chiffres révèlent**
+
+- Réalistes : moyenne ~57 · Romantiques : ~62
+- L'écart existe mais il ne sépare pas nettement les deux mouvements
+- Scott (50) et Maupassant (41) sont les plus complexes pour des raisons différentes : style historique dense vs prose tendue et économe
+
+:::
+::: {.column width="50%"}
+**Limites**
+
+- Brontë C. (41%) et Scott (44%) ont autant de dialogues que Balzac → leur score FK élevé ne vient pas des phrases courtes
+- KM donne le même classement : les deux indices mesurent la même chose
+
+::: {.fragment}
+→ Réponse partielle à la problématique : les indices de lisibilité reflètent des tendances, mais sans rupture nette.
+:::
+:::
+:::
+
+## Loi de Zipf avec Père Goriot
+
+::: {.columns}
+::: {.column width="55%"}
+![Loi de Zipf Père Goriot (log-log)](images/zipf_pg.png)
+:::
+::: {.column width="45%"}
+Top 10 mots de *Père Goriot* (notebook) :
+
+| Rang | Mot | Fréq. |
+|------|-----|------:|
+| 1 | the | 5 315 |
+| 2 | to | 3 052 |
+| 3 | of | 2 872 |
+| 4 | a | 2 620 |
+| 5 | and | 2 575 |
+
+La droite log-log confirme la loi : **fréquence ∝ 1/rang**.
+
+::: {.callout-note appearance="minimal"}
+Tous mots grammaticaux → universel dans tout texte en anglais, indépendamment du style littéraire.
+:::
+:::
+:::
+
+## Loi de Zipf : Tous les romans
+
+::: {.columns}
+::: {.column width="55%"}
+![Loi de Zipf tous les romans](images/zipf_all.png)
+:::
+::: {.column width="45%"}
+**Observations**
+
+- Loi vérifiée sur l'ensemble du corpus
+- Pentes **légèrement différentes** selon les auteurs
+  - Pente raide → vocabulaire concentré
+  - Pente douce → vocabulaire plus riche
+- *Indiana* (Sand) : fréquences plus basses à rang égal — conséquence directe de sa **taille réduite** (14 000 mots)
+
+::: {.fragment}
+→ La loi de Zipf est universelle : elle ne distingue pas Romantisme et Réalisme. Les différences de pente sont stylistiques, pas mouvementales.
+:::
+:::
+:::
+
+## Fenêtres glissantes sur la stabilité du style
+
+::: {.columns}
+::: {.column width="55%"}
+![FK sur fenêtres glissantes — Père Goriot](images/fk_sliding_wind.png)
+:::
+::: {.column width="45%"}
+Résultats réels (notebook) :
+
+| Fenêtre | Moyenne | Écart-type |
+|---------|---------|------------|
+| 500 mots | 67.40 | **6.84** |
+| 1 000 mots | 67.39 | **6.00** |
+| 2 000 mots | 67.14 | **5.86** |
+
+La **moyenne reste stable** (~67) quelle que soit la taille.
+
+::: {.callout-note appearance="minimal"}
+→ **1 000 mots** = meilleur compromis : lisse le bruit local sans effacer les variations stylistiques internes.
+:::
+:::
+:::
+
+## Dialogue vs Narration
+
+::: {.columns}
+::: {.column width="55%"}
+![Proportion dialogue / narration par auteur](images/dialog_narr.png)
+:::
+::: {.column width="45%"}
+**Défi typographique détecté**
+
+Gutenberg utilise `\u201c \u201d` (guillemets Unicode), pas `"`. Les textes français utilisent le tiret `—`.
+
+**Conséquence :** Germinal, Rouge et Noir, Monte-Cristo affichent **0% de dialogue détecté** — non par absence de dialogues, mais par convention typographique non captée.
+
+::: {.callout-important appearance="minimal"}
+Romantiques anglais : **40–44%** dialogue  
+Réalistes français : **13–17%**  
+→ Distinction **nette** — mais **langue & typographie** confondues avec le mouvement littéraire.
+:::
+:::
+:::
+
+# 05 · Optimisation Spark {background-color="#1A2B5E"}
+
+## Cache & Persist
+
+::: {.columns}
+::: {.column width="50%"}
+**Résultats réels (notebook)**
 
 | Appel | Sans cache | Avec cache |
-|---|---:|---:|
-| 1er | 0.22 s | 1.48 s |
-| 2ème | 0.21 s | 0.07 s |
+|-------|-----------|------------|
+| 1er | 0.20s | 1.39s |
+| 2ème | **0.17s** | **0.10s** |
+| Gain | — | **+41.2%** |
 
-Le premier appel avec cache est plus lent car Spark doit lire puis stocker les données. Le deuxième appel est environ **3 fois plus rapide**.
-
----
-
-## Quand le cache devient utile
-
-Le cache est rentable lorsque le même DataFrame est réutilisé plusieurs fois.
-
-Dans ce projet, c'est le cas de `df_annotated`, utilisé pour :
-
-- FK ;
-- KM ;
-- Zipf ;
-- fenêtres glissantes ;
-- dialogue / narration.
-
-Le gain devient donc significatif sur l'ensemble du pipeline, même si le premier appel est plus coûteux.
-
----
-
-## Checkpointing
-
-Le cache et le persist ne coupent pas le **lineage** Spark.
-
-Le lineage correspond à la chaîne de recalcul que Spark conserve pour reconstruire un DataFrame en cas d'échec.
-
-Le checkpoint :
-
-- sauvegarde le DataFrame sur Drive ou HDFS ;
-- coupe réellement le lineage ;
-- rend les étapes suivantes plus robustes ;
-- évite des plans d'exécution trop profonds.
-
----
-
-## Cache, persist, checkpoint {.smaller}
-
-| Mécanisme | Stockage | Survit à crash | Coupe lineage | Usage typique |
-|---|---|---|---|---|
-| `cache()` | RAM | Non | Non | DataFrame réutilisé plusieurs fois |
-| `persist(DISK_ONLY)` | Disque local | Partiel | Non | DataFrame trop lourd pour la RAM |
-| `checkpoint()` | Drive / HDFS | Oui | Oui | Pipeline long, lineage trop profond |
-
-Dans le projet, le checkpoint est appliqué juste après l'annotation NLP, c'est-à-dire au point le plus profond du pipeline.
-
----
-
-## Niveaux de persist {.smaller}
+Le 1er appel avec cache est **7× plus lent** (lecture + stockage en RAM).  
+Le 2ème est **41% plus rapide** et le gain se cumule sur chaque appel suivant.
+:::
+::: {.column width="50%"}
+**Niveaux de persist**
 
 | Niveau | 1er appel | 2ème appel |
-|---|---:|---:|
-| MEMORY_ONLY | 1.30 s | 0.20 s |
-| MEMORY_AND_DISK | 2.26 s | 0.31 s |
-| DISK_ONLY | 1.41 s | 0.23 s |
+|--------|-----------|------------|
+| `MEMORY_ONLY` | 1.30s | **0.20s** |
+| `MEMORY_AND_DISK` | 2.26s | 0.31s |
+| `DISK_ONLY` | 1.41s | 0.23s |
 
-Analyse :
+`MEMORY_ONLY` est optimal ici : le corpus annoté **rentre entièrement en RAM** sur Colab. Sur un cluster avec moins de mémoire, `MEMORY_AND_DISK` serait plus robuste.
 
-- `MEMORY_ONLY` est le plus rapide ici car le corpus tient en RAM ;
-- `MEMORY_AND_DISK` serait plus robuste avec moins de mémoire ;
-- le bon niveau dépend de la taille des données et du cluster.
+::: {.callout-note appearance="minimal"}
+`df_annotated` est utilisé 5 fois (FK, KM, Zipf, fenêtres, dialogue) → le cache est rentabilisé dès le 2ème usage.
+:::
+:::
+:::
 
----
+## Checkpoint — Couper le lineage
 
-## Identification des shuffles
+::: {.columns}
+::: {.column width="55%"}
+```{mermaid}
+flowchart TD
+    A["Gutenberg .txt"] --> B["SparkDataFrame"]
+    B --> C["Pipeline NLP\n(DocumentAssembler\n→ Tokenizer)"]
+    C --> D["df_annotated"]
+    D -->|"cache/persist"| E["Lineage conservé\n⚠ plan profond"]
+    D -->|"checkpoint()"| F["✅ Lineage tronqué\nScan ExistingRDD"]
+    style F fill:#2C5F2D,color:#fff
+    style E fill:#8B0000,color:#fff
+```
+:::
+::: {.column width="45%"}
+| Mécanisme | Stockage | Survit crash | Coupe lineage |
+|-----------|----------|-------------|---------------|
+| `cache()` | RAM | Non | **Non** |
+| `persist(DISK)` | Disque | Partiel | **Non** |
+| `checkpoint()` | Drive | **Oui** | **Oui** ✓ |
 
-Un shuffle se produit quand Spark redistribue les données entre partitions.
+Coût mesuré : **3.74s** (négligeable).
 
-Dans ce projet, le shuffle critique apparaît dans le calcul de Zipf :
+::: {.callout-important appearance="minimal"}
+Après checkpoint, le plan passe de toute la chaîne NLP à un simple `Scan ExistingRDD`, preuve que le lineage est bien tronqué.
+:::
+:::
+:::
+
+## Shuffles & Mitigation
+
+::: {.columns}
+::: {.column width="55%"}
+**Shuffle critique identifié via `explain()`**
 
 ```text
-HashAggregate(keys=[title, word], functions=[count(1)])
-  Exchange hashpartitioning(title, word, 200)  <- SHUFFLE
-    HashAggregate(keys=[title, word], functions=[partial_count(1)])
-      Generate explode(tokens)
-        Scan Parquet
+HashAggregate(keys=[title, word])
+  ← Exchange hashpartitioning(title, word, 200)
+      HashAggregate (partial_count)
+        Generate explode(tokens)
+          Scan Parquet
 ```
 
-Le `groupBy("title", "word")` oblige Spark à rassembler les tokens identiques.
+Le `groupBy("title", "word")` du calcul Zipf force Spark à **redistribuer tous les tokens** entre les 200 partitions.
+:::
+::: {.column width="45%"}
+**Résultats réels des mitigations**
 
----
+| Stratégie | Temps | Gain |
+|-----------|-------|------|
+| 200 partitions (défaut) | 244.88s | — |
+| 8 partitions | 235.64s | **+3.8%** |
+| `repartition(14)` | 2.31s | **−27.6%** ⚠️ |
+| **broadcast join** | **1.04s** | **+35.8%** ✓ |
 
-## Mitigation des shuffles
+::: {.callout-important appearance="minimal"}
+`repartition()` est **contre-productif** : il ajoute un shuffle avant le `groupBy`. Le **broadcast join** est la seule mitigation significative : 14 lignes de métadonnées, candidates idéales.
+:::
+:::
+:::
 
-Première stratégie : réduire le nombre de partitions de shuffle.
+# 06 · Conclusion {background-color="#1A2B5E"}
 
-| Stratégie | Temps |
-|---|---:|
-| 200 partitions par défaut | 318.99 s |
-| 8 partitions optimisées | 318.89 s |
+## Réponse à la problématique
 
-Le gain est négligeable sur ce corpus.
+**La stylométrie distingue-t-elle Romantisme et Réalisme ?**
 
-Interprétation :
+::: {.columns}
+::: {.column width="50%"}
+**Oui, partiellement**
 
-- 14 romans restent un petit volume pour Spark ;
-- la réduction des partitions évite des partitions vides ;
-- mais elle ne change pas fondamentalement le coût du calcul.
+- Réalistes ~57 vs Romantiques ~62 en FK → tendance réelle
+- Dialogue/narration : distinction **nette** (40–44% vs 13–17%)
+- Loi de Zipf : **universelle**, ne discrimine pas les mouvements
 
----
+**Mais** les différences observées mêlent :
+- langue d'origine (anglais vs français)
+- conventions typographiques (guillemets vs tirets)
+- longueur des textes (Indiana, 14 000 mots)
+:::
+::: {.column width="50%"}
+**Spark est-il adapté à l'analyse littéraire ?**
 
-## Stratégies supplémentaires {.smaller}
+- Parallélisme utile pour les 14 romans
+- Parquet et cache réduisent les recalculs
+- Checkpoint robustifie un pipeline long
 
-| Stratégie | Temps (s) | Gain |
-|---|---:|---:|
-| 200 partitions par défaut | 318.99 | - |
-| 8 partitions | 318.89 | ~0 % |
-| `repartition(14, "title")` | 2.31 | -27.6 % |
-| broadcast join | 1.04 | 35.8 % |
+**Leçon d'optimisation :**
 
-Le `repartition()` est contre-productif ici car il ajoute un shuffle avant le `groupBy`.
+> Une stratégie efficace sur un grand corpus peut être **inutile ou contre-productive** sur un petit. Sur 14 romans, seul le broadcast join apporte un gain mesurable (+35.8%). La repartition, efficace en théorie, est **−27.6%** ici.
 
-Le **broadcast join** est la mitigation la plus efficace : les métadonnées ne contiennent que 14 lignes et peuvent être envoyées à chaque executor.
+→ **Toujours mesurer avant de conclure.**
+:::
+:::
 
----
+## Merci de votre attention !
 
-## Spark-NLP vs SpaCy
+::: {.columns}
+::: {.column width="50%"}
+**Paulette Diouf**  
+**Aya Louzary**  
+**Yousra Tersi**  
 
-La comparaison avec SpaCy n'a pas été réalisée par manque de temps.
+M1 · Université Paris Cité  
+IFEBY310 — Big Data, 2025
+:::
+::: {.column width="50%"}
+**Données**  
+Project Gutenberg · 14 romans · ~1.6M mots
 
-Lecture qualitative :
+**Stack**  
+PySpark 3.5.0 · Spark-NLP 5.5.3  
+Plotly · Google Colab · 8 cores
 
-- SpaCy offre une API simple et des modèles pré-entraînés récents ;
-- Spark-NLP s'intègre mieux à un pipeline Spark distribué ;
-- pour un corpus beaucoup plus grand, Spark-NLP devient plus pertinent ;
-- pour une analyse locale plus légère, SpaCy serait probablement plus rapide à mettre en place.
-
----
-
-# Conclusion
-
-## Bilan technique
-
-Le projet a permis de construire un pipeline complet :
-
-- extraction depuis Gutenberg ;
-- nettoyage ;
-- DataFrame Spark ;
-- annotation Spark-NLP ;
-- stockage Parquet ;
-- analyses stylométriques ;
-- mesures de performance Spark.
-
-Spark s'est montré adapté au traitement parallèle du corpus, surtout grâce au stockage Parquet, au cache et au checkpoint.
-
----
-
-## Bilan stylométrique
-
-Les analyses confirment plusieurs tendances :
-
-- les indices FK et KM restent cohérents entre eux ;
-- la loi de Zipf est vérifiée sur tout le corpus ;
-- les fenêtres glissantes montrent une stabilité globale du style ;
-- le dialogue vs narration révèle l'importance des conventions typographiques.
-
-En revanche, les résultats ne montrent pas de séparation nette et automatique entre romantisme et réalisme.
-
----
-
-## Message final
-
-Deux leçons principales ressortent.
-
-Sur le plan Spark :
-
-> Il faut mesurer avant d'optimiser : une stratégie pertinente sur un grand corpus peut être inutile, voire négative, sur un petit corpus.
-
-Sur le plan littéraire :
-
-> Les indicateurs quantitatifs éclairent les tendances stylistiques, mais ils doivent être interprétés avec les limites du corpus et du prétraitement.
-
----
-
-## Annexes possibles
-
-Le rapport contient également le code complet pour :
-
-- l'installation de Spark et Spark-NLP ;
-- l'ETL Gutenberg ;
-- la construction du DataFrame ;
-- le pipeline d'annotation ;
-- les calculs FK, KM, Zipf, fenêtres glissantes ;
-- la détection dialogue / narration ;
-- les benchmarks et optimisations Spark.
-
-Ces blocs peuvent être ajoutés en backup slides si nécessaire.
+**Rapport complet + code**  
+`our_report.qmd` · `Projet_BigData_final.ipynb`
+:::
+:::
